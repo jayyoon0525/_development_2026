@@ -24,7 +24,7 @@ Public Sub CreateConfluencePageFromEmail()
     confluenceUrl = "https://devstack.vwgroup.com/confluence/rest/api/content"
     spaceKey = "VWGKIC"
     parentPageId = "7207011679"
-    authKey = "Bearer QpeXwtDX0kutjaN3OGDN7YyLnsc73O4OgIggFT"
+    authKey = "Bearer <여기에 Confluence API 토큰을 입력하세요.>"
     ' ------------------------------
 
     Dim rawHTML As String, safeHTML As String, safeTitle As String
