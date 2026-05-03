@@ -34,7 +34,7 @@ Sub CreateJiraIssueFromEmail()
     jiraUrl = "https://devstack.vwgroup.com/jira/rest/api/2/issue"
     projectKey = "KRINFOTEST"
     issueType = "Task"
-    authKey = "Bearer <여기에 Jira API 토큰을 입력하세요.>
+    authKey = "Bearer <여기에 Jira API 토큰을 입력하세요>
     
     ' 직접 찾으신 스토리 포인트와 시작일 필드 ID
     storyPointFieldId = "customfield_10006"
