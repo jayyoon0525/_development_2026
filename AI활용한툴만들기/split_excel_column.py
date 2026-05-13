@@ -87,7 +87,7 @@ def split_column_by_delimiter(input_file, output_file=None):
         print("- Sheet1: 원본 데이터")
         print("- Sheet2: 중복 제거된 고유 데이터 (A열: 왼쪽 고유값, B열: 오른쪽 고유값)")
     else:
-        print("열을 찾을 수 없습니다.")
+        print("열을 찾을 수 없습니다..")
 
 # 사용 예시
 if __name__ == "__main__":
