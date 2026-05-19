@@ -1,9 +1,12 @@
+# ctypes는 Python 표준 라이브러리의 모듈로, C 호환 데이터 타입을 제공하고 C 함수를 호출할 수 있게 해줍니다. 
+# 주로 Windows DLL(예: user32.dll)이나 공유 라이브러리를 Python에서 직접 호출하는 데 사용됩니다.
+
+
 import argparse
-import ctypes
+import ctypes 
 import signal
 import sys
 import time
-
 
 class POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
