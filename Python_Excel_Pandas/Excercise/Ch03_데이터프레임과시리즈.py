@@ -1,4 +1,5 @@
 import pandas as pd
+from pathlib import Path
 
 #3.1.2 데이터 프레임의 구조 확인하기
 print("=====3.1.2 데이터 프레임의 구조 확인하기======")
@@ -46,3 +47,41 @@ print(df2.index[0])
 print(df2.values)
 print(df2.values[0])
 
+#3.3 파일에서 데이터 프레임 불러오기
+#3.3.1 엑셀 파일에서 데이터 프레임 불러오기 (read_excel)
+print('==============================================')
+print('=====3.3 파일에서 데이터 프레임 불러오기=====')
+url1 = 'https://github.com/panda-kim/book1/blob/main/01read_excel.xlsx?raw=true' # git 허브에서 가져온 파일
+url2 = 'G:\\_Development\\_development_2026\\Python_Excel_Pandas\\Excercise\\01read_excel.xlsx' # git 허브 파일을 local에 저장하여 불어오기
+df4 = pd.read_excel(url1)
+df5 = pd.read_excel(url2)
+print(df4)
+print(df5)
+
+#두 번째 sheet 불러오기
+print('=====두 번째 sheet 불러오기=====')
+df4 = pd.read_excel(url1, sheet_name='sheet_name')
+print(df4)
+
+df4 = pd.read_excel(url1, sheet_name = 1)
+print(df4)
+
+#세 번째 sheet 불러오기
+print('=====세 번째 sheet 불러오기=====')
+df4 = pd.read_excel(url1, sheet_name= 2)
+print(df4)
+#세 번째 sheet의 1, 2행이 공백이기 때문에 header에 숫자 2을 붙이면 공백을 제외한 3번째 행부터 불러온다.
+df4 = pd.read_excel(url1, sheet_name= 2, header = 2)
+print(df4)
+# 맨 쪽 열을 인덱스로 지정해 네 번째 시트 불러오기
+df4 = pd.read_excel(url1, sheet_name = 3, index_col = 0)
+print(df4)
+# 다섯 번째 시트를 불러오면서 학생코드 열을 문자열로 지정
+df4 = pd.read_excel(url1, sheet_name = 4, dtype = {'학생코드':'str'})
+print(df4)
+
+#3.3.2 CSV 파일에서 데이터 프레임 불러오기 (read_CSV)
+url1 = 'https://github.com/panda-kim/book1/blob/main/02read_csv1.csv?raw=true'
+url2 = 'G:\\_Development\\_development_2026\\Python_Excel_Pandas\\Excercise\\02read_csv1.csv'
+df = pd.read_csv(url2)
+print(df)
