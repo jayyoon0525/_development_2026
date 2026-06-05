@@ -85,3 +85,21 @@ url1 = 'https://github.com/panda-kim/book1/blob/main/02read_csv1.csv?raw=true'
 url2 = 'G:\\_Development\\_development_2026\\Python_Excel_Pandas\\Excercise\\02read_csv1.csv'
 df = pd.read_csv(url2)
 print(df)
+
+# 3.4 데이터 프레임 저장하기
+print('==============================================')
+print('=====3.4 데이터 프레임 저장하기=====')
+print('=====3.4.1 딕셔너리로 변환하기=====')
+print(df.to_dict())
+
+print('=====3.4.2 파일로 저장하기(to_excel, to_csv)=====')
+#df.to_excel('1.xlsx') # 인덱스도 함께 저장된다.
+df.to_excel('1.xlsx', index=False) # 인덱스가 보이지 않는다.
+df.to_csv('2.csv', index=False)
+
+print('=====3.4.3 함수와 메서드, 속성=====')
+url3 = 'https://github.com/panda-kim/book1/blob/main/04titanic.xlsx?raw=true'
+df = pd.read_excel(url3)
+df.to_excel('04titanic.xlsx', index=False)
+print(df)
+print(df.columns)
