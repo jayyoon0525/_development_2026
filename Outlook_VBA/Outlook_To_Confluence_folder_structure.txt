@@ -1,0 +1,529 @@
+Option Explicit
+
+' =================================================================================
+' ★ 사용자 환경 설정 ★
+' =================================================================================
+Const CONFLUENCE_URL As String = "https://devstack.vwgroup.com/confluence/rest/api/content"
+Const SPACE_KEY As String = "VWGKIC"
+Const ROOT_PARENT_PAGE_ID As String = "7191671867"
+Const AUTH_KEY As String = "Bearer QpeXwtDX0kutjaN3OGDN7YyLnsc73O4OgIggFT"
+' =================================================================================
+
+' =========================================================
+' 메인 시작점: 선택한 폴더와 모든 하위 폴더 동기화
+' =========================================================
+Public Sub SyncOutlookToConfluence_FullTree()
+    
+    Dim targetFolder As Outlook.MAPIFolder
+    Set targetFolder = Application.ActiveExplorer.CurrentFolder
+    
+    If targetFolder Is Nothing Then
+        MsgBox "현재 폴더를 선택해 주세요.", vbCritical
+        Exit Sub
+    End If
+    
+    MsgBox "[" & targetFolder.Name & "] 및 하위 폴더의 모든 메일을 업데이트합니다.", vbInformation, "동기화 시작"
+    
+    Dim tempPath As String
+    tempPath = Environ$("TEMP") & "\OutlookSyncToConf\"
+    EnsureFolderExists tempPath
+    
+    ' 재귀적 폴더 처리 시작 (루트 부모 ID부터 시작)
+    ProcessFolderRecursive targetFolder, ROOT_PARENT_PAGE_ID, tempPath
+    
+    MsgBox "모든 폴더 및 하위 폴더 동기화가 성공적으로 완료되었습니다!", vbInformation, "동기화 완료"
+
+End Sub
+
+' =========================================================
+' 폴더 처리 및 하위 폴더 탐색 (재귀 함수)
+' =========================================================
+Private Sub ProcessFolderRecursive(f As Outlook.MAPIFolder, parentId As String, tempPath As String)
+    
+    DoEvents ' 아웃룩 프리징 방지
+    
+    ' 1. 현재 폴더에 대한 페이지 제목 생성 및 계정명 제거
+    Dim baseTitle As String
+    baseTitle = f.folderPath
+    If Left(baseTitle, 2) = "\\" Then baseTitle = mid(baseTitle, 3)
+    baseTitle = Replace(baseTitle, "\", " > ")
+    
+    Dim prefixToRemove As String
+    prefixToRemove = "jaeyoung.yoon@vwgk.co.kr > "
+    If LCase(Left(baseTitle, Len(prefixToRemove))) = LCase(prefixToRemove) Then
+        baseTitle = mid(baseTitle, Len(prefixToRemove) + 1)
+    End If
+    
+    ' ★ 마지막 폴더 업데이트 실패 원인 해결: 제목 길이 제한(255자) 방어
+    If Len(baseTitle) > 200 Then
+        baseTitle = "..." & Right(baseTitle, 195)
+    End If
+    
+    Dim currentTitle As String: currentTitle = baseTitle
+    Dim ver As Integer: ver = 1
+    Dim pageId As String: pageId = ""
+    Dim currentHtml As String: currentHtml = ""
+    Dim currentVersion As Integer: currentVersion = 1
+    Dim pageTitle As String: pageTitle = ""
+    
+    ' 2. 컨플루언스 페이지 확인 및 생성 (부모-자식 관계 설정)
+    Dim loopLimit As Integer
+    For loopLimit = 1 To 50
+        pageId = GetPageIdByTitle(currentTitle)
+        
+        If pageId <> "" Then
+            If GetPageInfo(pageId, currentHtml, currentVersion, pageTitle) Then
+                If InStr(currentHtml, "") > 0 Then
+                    Exit For
+                Else
+                    ver = ver + 1
+                    currentTitle = Left(baseTitle, 190) & "_v" & ver
+                End If
+            Else
+                Exit For
+            End If
+        Else
+            ' 페이지가 없으면 신규 생성
+            Dim initialHtml As String
+            initialHtml = "" & _
+                          "<h2>Outlook Folder: " & XmlEscape(f.Name) & "</h2>" & _
+                          "<table><tbody>" & _
+                          "<tr><th>No</th><th>Received</th><th>Sender</th><th>Subject</th><th>Attachment</th></tr>" & _
+                          "</tbody></table>"
+            
+            pageId = CreatePage(currentTitle, parentId, initialHtml)
+            If pageId <> "" Then
+                GetPageInfo pageId, currentHtml, currentVersion, pageTitle
+            End If
+            Exit For
+        End If
+    Next loopLimit
+    
+    ' 3. 메일 업데이트 진행
+    If pageId <> "" Then
+        SyncMailsToPage f, pageId, currentHtml, currentVersion, pageTitle, tempPath
+        
+        ' 4. 하위 폴더가 있다면 재귀 호출
+        Dim subF As Outlook.MAPIFolder
+        For Each subF In f.Folders
+            ProcessFolderRecursive subF, pageId, tempPath
+        Next
+    End If
+
+End Sub
+
+' =========================================================
+' 메일 동기화 로직 (중복 방지 및 4/8 누락 문제 해결)
+' =========================================================
+Private Sub SyncMailsToPage(f As Outlook.MAPIFolder, pageId As String, currentHtml As String, currentVersion As Integer, pageTitle As String, tempPath As String)
+    
+    Dim itms As Outlook.Items
+    Set itms = f.Items
+    
+    ' 수신시간 순으로 처리하여 꼬임 방지
+    On Error Resume Next
+    itms.Sort "[ReceivedTime]", True
+    On Error GoTo 0
+    
+    ' ★ 리스트 2배 증가 해결: 현재 페이지에 올라간 첨부파일 이름 추출
+    Dim existingFiles As Object
+    Set existingFiles = CreateObject("Scripting.Dictionary")
+    Dim existingIds As Object
+    Set existingIds = CreateObject("Scripting.Dictionary")
+    
+    Dim p1 As Long, p2 As Long
+    p1 = 1
+    Do
+        p1 = InStr(p1, LCase(currentHtml), "ri:filename=""")
+        If p1 = 0 Then Exit Do
+        p1 = p1 + 13
+        p2 = InStr(p1, currentHtml, """")
+        If p2 > p1 Then
+            existingFiles(mid(currentHtml, p1, p2 - p1)) = True
+            p1 = p2
+        End If
+    Loop
+    
+    p1 = 1
+    Do
+        p1 = InStr(p1, currentHtml, "")
+        If p2 > p1 Then
+            existingIds(mid(currentHtml, p1, p2 - p1)) = True
+            p1 = p2
+        End If
+    Loop
+    
+    ' No. 계산용 테이블 행 카운트
+    Dim trCount As Long, tempP As Long
+    trCount = 0
+    tempP = 1
+    Do
+        tempP = InStr(tempP, LCase(currentHtml), "<tr")
+        If tempP > 0 Then
+            trCount = trCount + 1
+            tempP = tempP + 3
+        Else
+            Exit Do
+        End If
+    Loop
+    
+    Dim currentSeq As Long
+    If trCount > 0 Then
+        currentSeq = trCount
+    Else
+        currentSeq = 1
+    End If
+    
+    Dim newRowsHtml As String: newRowsHtml = ""
+    Dim uploadCount As Long: uploadCount = 0
+    Dim i As Long, it As Object
+    
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    
+    For i = 1 To itms.Count
+        If i Mod 20 = 0 Then DoEvents
+        
+        On Error Resume Next
+        Set it = itms.Item(i)
+        On Error GoTo 0
+        
+        If Not it Is Nothing Then
+            Dim entryId As String: entryId = ""
+            On Error Resume Next
+            entryId = it.entryId
+            On Error GoTo 0
+            
+            If Len(entryId) > 0 Then
+                Dim sSubj As String: sSubj = "No Subject"
+                Dim sTime As Date: sTime = Now
+                
+                On Error Resume Next
+                If Len(it.Subject) > 0 Then sSubj = it.Subject
+                sTime = it.ReceivedTime
+                On Error GoTo 0
+                
+                ' 기본 파일명 생성 (예: 20260421_082619_RE_ Scan from MyMFP.msg)
+                Dim baseFileName As String
+                baseFileName = Format(sTime, "yyyymmdd_hhnnss") & "_" & CleanFileName(Left(sSubj, 100)) & ".msg"
+                
+                ' 1. 이미 동일한 식별자(MSGID)가 있거나, 파일명이 존재하면 신규 메일 아님 (스킵)
+                If (Not existingIds.Exists(entryId)) And (Not existingFiles.Exists(baseFileName)) Then
+                    
+                    Dim itemSize As Long: itemSize = 0
+                    On Error Resume Next: itemSize = it.Size: On Error GoTo 0
+                    
+                    If itemSize <= 104857600 Then
+                        Dim sName As String: sName = "Unknown"
+                        On Error Resume Next
+                        If Len(it.SenderName) > 0 Then sName = it.SenderName
+                        On Error GoTo 0
+                        
+                        ' ★ 8개 중 4개 누락 해결: 동일 시간(초단위) 중복 방어 로직
+                        Dim finalFileName As String
+                        finalFileName = baseFileName
+                        Dim collisionCount As Integer: collisionCount = 1
+                        
+                        ' 똑같은 파일명이 이미 이번 루프에 예약되어 있다면 _1, _2를 붙여 고유하게 만듦
+                        Do While existingFiles.Exists(finalFileName)
+                            finalFileName = Format(sTime, "yyyymmdd_hhnnss") & "_" & CleanFileName(Left(sSubj, 100)) & "_" & collisionCount & ".msg"
+                            collisionCount = collisionCount + 1
+                        Loop
+                        
+                        ' 겹치지 않는 파일명을 확보했으므로 예약 명단에 등록
+                        existingFiles(finalFileName) = True
+                        existingIds(entryId) = True
+                        
+                        Dim filePath As String
+                        filePath = tempPath & finalFileName
+                        
+                        On Error Resume Next
+                        it.SaveAs filePath, 9
+                        If Err.Number <> 0 Then
+                            Err.Clear
+                            it.SaveAs filePath, 3
+                        End If
+                        On Error GoTo 0
+                        
+                        If fso.FileExists(filePath) Then
+                            DoEvents
+                            If UploadToConfluence(CONFLUENCE_URL, pageId, filePath, AUTH_KEY) Then
+                                newRowsHtml = newRowsHtml & "<tr>" & _
+                                              "<td>" & currentSeq & "</td>" & _
+                                              "<td>" & XmlEscape(Format(sTime, "yyyy-mm-dd hh:nn:ss")) & "</td>" & _
+                                              "<td>" & XmlEscape(sName) & "</td>" & _
+                                              "<td>" & XmlEscape(sSubj) & "</td>" & _
+                                              "<td><ac:link><ri:attachment ri:filename=""" & XmlEscape(finalFileName) & """ />" & _
+                                              "<ac:plain-text-link-body><![CDATA[" & finalFileName & "]]></ac:plain-text-link-body></ac:link></td>" & _
+                                              "</tr>"
+                                uploadCount = uploadCount + 1
+                                currentSeq = currentSeq + 1
+                            End If
+                            
+                            On Error Resume Next
+                            Kill filePath
+                            On Error GoTo 0
+                        End If
+                    End If
+                End If
+            End If
+            Set it = Nothing
+        End If
+    Next i
+    
+    Set fso = Nothing
+    
+    If uploadCount > 0 Then
+        Dim insertPos As Long
+        insertPos = InStrRev(LCase(currentHtml), "</tbody>")
+        
+        If insertPos > 0 Then
+            currentHtml = Left(currentHtml, insertPos - 1) & newRowsHtml & mid(currentHtml, insertPos)
+        Else
+            currentHtml = currentHtml & "<table><tbody>" & _
+                          "<tr><th>No</th><th>Received</th><th>Sender</th><th>Subject</th><th>Attachment</th></tr>" & _
+                          newRowsHtml & "</tbody></table>"
+        End If
+        UpdateConfluencePage pageId, pageTitle, currentHtml, currentVersion
+    End If
+End Sub
+
+' =========================================================
+' 유틸리티 및 API 함수 (블록 문법 완전 분리형)
+' =========================================================
+Private Function CreatePage(title As String, parentId As String, htmlBody As String) As String
+    Dim payload As String
+    payload = "{""type"":""page"",""title"":""" & CleanTextForJSON(title) & """," & _
+              """space"":{""key"":""" & SPACE_KEY & """}," & _
+              """ancestors"":[{""id"":""" & parentId & """}]," & _
+              """body"":{""storage"":{""value"":""" & EscapeForJSON(htmlBody) & """,""representation"":""storage""}}}"
+              
+    Dim http As Object
+    Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+    http.setTimeouts 10000, 10000, 30000, 30000
+    http.Open "POST", CONFLUENCE_URL, False
+    http.setRequestHeader "Content-Type", "application/json"
+    http.setRequestHeader "Authorization", AUTH_KEY
+    
+    On Error Resume Next
+    http.Send payload
+    On Error GoTo 0
+    
+    If http.status = 200 Or http.status = 201 Then
+        CreatePage = ExtractString(http.responseText, """id"":""", """")
+    Else
+        CreatePage = ""
+    End If
+    Set http = Nothing
+End Function
+
+Private Sub UpdateConfluencePage(pageId As String, title As String, newHtml As String, currentVersion As Integer)
+    Dim payload As String
+    payload = "{""id"":""" & pageId & """,""type"":""page"",""title"":""" & CleanTextForJSON(title) & """,""space"":{""key"":""" & SPACE_KEY & """}," & _
+              """body"":{""storage"":{""value"":""" & EscapeForJSON(newHtml) & """,""representation"":""storage""}}," & _
+              """version"":{""number"":" & (currentVersion + 1) & "}}"
+              
+    Dim http As Object
+    Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+    http.setTimeouts 10000, 10000, 30000, 30000
+    http.Open "PUT", CONFLUENCE_URL & "/" & pageId, False
+    http.setRequestHeader "Content-Type", "application/json"
+    http.setRequestHeader "Authorization", AUTH_KEY
+    
+    On Error Resume Next
+    http.Send payload
+    On Error GoTo 0
+    Set http = Nothing
+End Sub
+
+Private Function GetPageInfo(pageId As String, ByRef outHtml As String, ByRef outVersion As Integer, ByRef outTitle As String) As Boolean
+    Dim http As Object
+    Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+    http.Open "GET", CONFLUENCE_URL & "/" & pageId & "?expand=body.storage,version", False
+    http.setRequestHeader "Authorization", AUTH_KEY
+    
+    On Error Resume Next
+    http.Send
+    On Error GoTo 0
+    
+    If http.status = 200 Then
+        Dim resp As String
+        resp = http.responseText
+        Dim p1 As Long, p2 As Long
+        p1 = InStr(resp, """value"":""")
+        
+        If p1 > 0 Then
+            p1 = p1 + 9
+            p2 = InStr(p1, resp, """,""representation""")
+            outHtml = mid(resp, p1, p2 - p1)
+            outHtml = Replace(outHtml, "\/", "/")
+            outHtml = Replace(outHtml, "\""", """")
+            outHtml = Replace(outHtml, "\n", "")
+            outHtml = Replace(outHtml, "\r", "")
+            outHtml = Replace(outHtml, "\t", "")
+        End If
+        
+        outVersion = Val(ExtractString(resp, """number"":", ","))
+        outTitle = ExtractString(resp, """title"":""", """")
+        GetPageInfo = True
+    Else
+        GetPageInfo = False
+    End If
+    Set http = Nothing
+End Function
+
+Private Function GetPageIdByTitle(title As String) As String
+    Dim http As Object
+    Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+    http.Open "GET", CONFLUENCE_URL & "?spaceKey=" & SPACE_KEY & "&title=" & EncodeURL(title), False
+    http.setRequestHeader "Authorization", AUTH_KEY
+    
+    On Error Resume Next
+    http.Send
+    On Error GoTo 0
+    
+    If http.status = 200 Then
+        If InStr(http.responseText, """size"":0") > 0 Then
+            GetPageIdByTitle = ""
+        Else
+            GetPageIdByTitle = ExtractString(http.responseText, """id"":""", """")
+        End If
+    Else
+        GetPageIdByTitle = ""
+    End If
+    Set http = Nothing
+End Function
+
+Private Function UploadToConfluence(baseUrl As String, pageId As String, filePath As String, authKey As String) As Boolean
+    Dim uploadUrl As String
+    uploadUrl = baseUrl & "/" & pageId & "/child/attachment"
+    
+    Dim fileName As String
+    fileName = mid$(filePath, InStrRev(filePath, "\") + 1)
+    
+    Dim boundary As String
+    boundary = "----WebKitFormBoundary" & Format(Now, "yyyyMMddhhmmss")
+    
+    Dim objStream As Object
+    Set objStream = CreateObject("ADODB.Stream")
+    objStream.Type = 1
+    objStream.Open
+    objStream.LoadFromFile filePath
+    
+    Dim fileContent As Variant
+    fileContent = objStream.Read
+    objStream.Close
+    
+    Dim xmlHttp As Object
+    Set xmlHttp = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+    xmlHttp.setTimeouts 10000, 10000, 300000, 300000
+    
+    Dim bodyStream As Object
+    Set bodyStream = CreateObject("ADODB.Stream")
+    bodyStream.Type = 1
+    bodyStream.Open
+    
+    StringToStream2 "--" & boundary & vbCrLf, bodyStream
+    StringToStream2 "Content-Disposition: form-data; name=""file""; filename=""" & fileName & """" & vbCrLf, bodyStream
+    StringToStream2 "Content-Type: application/octet-stream" & vbCrLf & vbCrLf, bodyStream
+    bodyStream.Write fileContent
+    StringToStream2 vbCrLf & "--" & boundary & "--" & vbCrLf, bodyStream
+    bodyStream.Position = 0
+    
+    xmlHttp.Open "POST", uploadUrl, False
+    xmlHttp.setRequestHeader "Authorization", authKey
+    xmlHttp.setRequestHeader "Content-Type", "multipart/form-data; boundary=" & boundary
+    xmlHttp.setRequestHeader "X-Atlassian-Token", "nocheck"
+    
+    On Error Resume Next
+    xmlHttp.Send bodyStream.Read
+    On Error GoTo 0
+    
+    UploadToConfluence = (xmlHttp.status = 200 Or xmlHttp.status = 201)
+    Set xmlHttp = Nothing
+    Set bodyStream = Nothing
+End Function
+
+Private Sub StringToStream2(str As String, ByRef stream As Object)
+    Dim ts As Object
+    Set ts = CreateObject("ADODB.Stream")
+    ts.Type = 2
+    ts.Charset = "utf-8"
+    ts.Open
+    ts.WriteText str
+    ts.Position = 0
+    ts.Type = 1
+    ts.Position = 3
+    stream.Write ts.Read
+    ts.Close
+    Set ts = Nothing
+End Sub
+
+Private Function CleanFileName(ByVal s As String) As String
+    Dim badChars As Variant
+    badChars = Array("\", "/", ":", "*", "?", """", "<", ">", "|", "[", "]", "&", "%", "#", "{", "}", "+", "=")
+    
+    Dim c As Variant
+    For Each c In badChars
+        s = Replace(s, CStr(c), "_")
+    Next c
+    
+    CleanFileName = Trim$(Replace(Replace(s, vbCr, " "), vbLf, " "))
+End Function
+
+Private Function XmlEscape(ByVal s As String) As String
+    s = Replace(s, "&", "&amp;")
+    s = Replace(s, "<", "&lt;")
+    s = Replace(s, ">", "&gt;")
+    s = Replace(s, """", "&quot;")
+    s = Replace(s, "'", "&#39;")
+    XmlEscape = s
+End Function
+
+Private Function EscapeForJSON(ByVal s As String) As String
+    s = Replace(s, "\", "\\")
+    s = Replace(s, """", "\""")
+    EscapeForJSON = s
+End Function
+
+Private Function CleanTextForJSON(ByVal s As String) As String
+    s = Replace(s, "\", "\\")
+    s = Replace(s, """", "\""")
+    CleanTextForJSON = s
+End Function
+
+Private Sub EnsureFolderExists(ByVal p As String)
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FolderExists(p) Then fso.CreateFolder p
+    Set fso = Nothing
+End Sub
+
+Private Function ExtractString(txt As String, sMark As String, eMark As String) As String
+    Dim p1 As Long
+    p1 = InStr(txt, sMark)
+    If p1 = 0 Then Exit Function
+    
+    p1 = p1 + Len(sMark)
+    Dim p2 As Long
+    p2 = InStr(p1, txt, eMark)
+    
+    If p2 > 0 Then
+        ExtractString = mid(txt, p1, p2 - p1)
+    End If
+End Function
+
+Private Function EncodeURL(ByVal txt As String) As String
+    Dim res As String
+    res = Replace(txt, "%", "%25")
+    res = Replace(res, " ", "%20")
+    res = Replace(res, "&", "%26")
+    res = Replace(res, "?", "%3F")
+    res = Replace(res, "=", "%3D")
+    res = Replace(res, ">", "%3E")
+    res = Replace(res, "<", "%3C")
+    res = Replace(res, "+", "%2B")
+    res = Replace(res, "#", "%23")
+    EncodeURL = res
+End Function
+

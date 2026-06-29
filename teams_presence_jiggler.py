@@ -71,8 +71,8 @@ def main():
         "-d",
         "--distance",
         type=int,
-        default=5,
-        help="Cursor move distance in pixels (default: 5)",
+        default=20,
+        help="Cursor move distance in pixels (default: 20)",
     )
     args = parser.parse_args()
 
