@@ -36,11 +36,14 @@ def copy_new_files(source_root, target_root):
                 print(f"⊘ 건너뜸 (이미 존재): {relative_path}")
             else:
                 # 대상 파일이 없으면 복사
-                # 필요한 폴더 구조 생성
-                target_item.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source_item, target_item)
-                copied_count += 1
-                print(f"✓ 복사됨: {relative_path}")
+                try:
+                    # 필요한 폴더 구조 생성
+                    target_item.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source_item, target_item)
+                    copied_count += 1
+                    print(f"✓ 복사됨: {relative_path}")
+                except Exception as e:
+                    print(f"⚠ 복사 실패: {relative_path} - {e}")
         
         elif source_item.is_dir():
             # 폴더인 경우
@@ -59,12 +62,17 @@ def copy_new_files(source_root, target_root):
 
 
 if __name__ == "__main__":
-    source = r"D:\ ".strip()  # D:\ 의 모든 파일
-    target = r"E:\_VW_Work"
+    source = "D:\\"  # D:\ 의 모든 파일
+    target = "E:\\_VW_Work"
     
     # 경로 존재 확인
     if not Path(source).exists():
         print(f"❌ 원본 경로가 존재하지 않습니다: {source}")
+        print(f"   현재 사용 가능한 드라이브를 확인하세요.")
+        exit(1)
+    
+    if not Path(target).drive or not Path(target).drive[0].isalpha():
+        print(f"❌ 대상 경로의 드라이브가 유효하지 않습니다: {target}")
         exit(1)
     
     # 복사 실행
